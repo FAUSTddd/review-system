@@ -1,0 +1,103 @@
+services:
+  # ============================================
+  # RabbitMQ — брокер сообщений
+  # ============================================
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: review_rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # MySQL для review-service
+  # ============================================
+  review-db:
+    image: mysql:8.0
+    container_name: review_db
+    ports:
+      - "3307:3306"          # ← хост-порт 3307 → порт контейнера 3306
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: review_db
+      MYSQL_USER: review
+      MYSQL_PASSWORD: review
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # MySQL для catalog-service
+  # ============================================
+  catalog-db:
+    image: mysql:8.0
+    container_name: catalog_db
+    ports:
+      - "3308:3306"          # ← хост-порт 3308 → порт контейнера 3306
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: catalog_db
+      MYSQL_USER: catalog
+      MYSQL_PASSWORD: catalog
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # review-service — создаёт отзывы, публикует события
+  # ============================================
+  review-service:
+    build: ./review-service
+    container_name: review_service
+    ports:
+      - "8000:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      review-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "mysql://review:review@review-db:3306/review_db?serverVersion=8.0"
+      MESSENGER_TRANSPORT_DSN: "amqp://guest:guest@rabbitmq:5672/%2f"
+    command: php -S 0.0.0.0:8000 -t public
+
+  # ============================================
+  # catalog-service — слушает события, обновляет рейтинг
+  # ============================================
+  catalog-service:
+    build: ./catalog-service
+    container_name: catalog_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      catalog-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "mysql://catalog:catalog@catalog-db:3306/catalog_db?serverVersion=8.0"
+      MESSENGER_TRANSPORT_DSN: "amqp://guest:guest@rabbitmq:5672/%2f"
+    command: php bin/console messenger:consume review_events -vv
+
+  # ============================================
+  # notification-service — слушает события, «отправляет» email
+  # ============================================
+  notification-service:
+    build: ./notification-service
+    container_name: notification_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      MESSENGER_TRANSPORT_DSN: "amqp://guest:guest@rabbitmq:5672/%2f"
+    command: php bin/console messenger:consume review_events -vv

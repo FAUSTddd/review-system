@@ -1,0 +1,13 @@
+framework:
+    messenger:
+        transports:
+            review_events:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    exchange:
+                        name: review_events
+                        type: fanout
+                    queues:
+                        notification_service_reviews: ~
+        routing:
+            'App\Message\ReviewCreatedEvent': review_events
